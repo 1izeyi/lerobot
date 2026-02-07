@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from lerobot.robots.so_follower import SOFollowerConfig
 
 from ..config import RobotConfig
+from typing import Optional
 
 
 @RobotConfig.register_subclass("bi_so_follower")
@@ -28,3 +29,5 @@ class BiSOFollowerConfig(RobotConfig):
 
     left_arm_config: SOFollowerConfig
     right_arm_config: SOFollowerConfig
+    left_anyskin_port: str
+    right_anyskin_port: str

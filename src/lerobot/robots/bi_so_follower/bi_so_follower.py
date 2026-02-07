@@ -22,6 +22,8 @@ from lerobot.robots.so_follower import SOFollower, SOFollowerRobotConfig
 
 from ..robot import Robot
 from .config_bi_so_follower import BiSOFollowerConfig
+from anyskin import AnySkinProcess
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +65,32 @@ class BiSOFollower(Robot):
 
         # Only for compatibility with other parts of the codebase that expect a `robot.cameras` attribute
         self.cameras = {**self.left_arm.cameras, **self.right_arm.cameras}
+
+        self.left_anyskin = AnySkinProcess(port=config.left_anyskin_port, device_id=0)
+        self.right_anyskin = AnySkinProcess(port=config.right_anyskin_port, device_id=1)
+
+    def _read_anyskin(self, sensor: AnySkinProcess | None):
+        if sensor is None:
+            return None
+
+        # 直接读共享内存（非阻塞）
+        reading = sensor.last_reading
+        if reading is None or len(reading) <= 1:
+            return None
+
+        # 去掉 timestamp
+        mags = reading[1:]
+
+        # 推断 num_mags（每个磁传感器 3 维）
+        if mags.size % 3 != 0:
+            return None  # 数据异常保护
+
+        num_mags = mags.size // 3
+
+        # reshape 成 (num_mags, 3)
+        tactile = mags.reshape(num_mags, 3).astype(np.float32, copy=False)
+
+        return tactile
 
     @property
     def _motors_ft(self) -> dict[str, type]:
@@ -126,25 +154,41 @@ class BiSOFollower(Robot):
         # Add "right_" prefix
         right_obs = self.right_arm.get_observation()
         obs_dict.update({f"right_{key}": value for key, value in right_obs.items()})
+        left_tactile = self._read_anyskin(self.left_anyskin)
+        right_tactile = self._read_anyskin(self.right_anyskin)
+
+        if left_tactile is not None:
+            obs_dict["left_tactile"] = left_tactile
+
+        if right_tactile is not None:
+            obs_dict["right_tactile"] = right_tactile
 
         return obs_dict
 
     def send_action(self, action: RobotAction) -> RobotAction:
         # Remove "left_" prefix
         left_action = {
-            key.removeprefix("left_"): value for key, value in action.items() if key.startswith("left_")
+            key.removeprefix("left_"): value
+            for key, value in action.items()
+            if key.startswith("left_")
         }
         # Remove "right_" prefix
         right_action = {
-            key.removeprefix("right_"): value for key, value in action.items() if key.startswith("right_")
+            key.removeprefix("right_"): value
+            for key, value in action.items()
+            if key.startswith("right_")
         }
 
         sent_action_left = self.left_arm.send_action(left_action)
         sent_action_right = self.right_arm.send_action(right_action)
 
         # Add prefixes back
-        prefixed_sent_action_left = {f"left_{key}": value for key, value in sent_action_left.items()}
-        prefixed_sent_action_right = {f"right_{key}": value for key, value in sent_action_right.items()}
+        prefixed_sent_action_left = {
+            f"left_{key}": value for key, value in sent_action_left.items()
+        }
+        prefixed_sent_action_right = {
+            f"right_{key}": value for key, value in sent_action_right.items()
+        }
 
         return {**prefixed_sent_action_left, **prefixed_sent_action_right}
 
