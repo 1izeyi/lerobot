@@ -24,6 +24,7 @@ from ..robot import Robot
 from .config_bi_so_follower import BiSOFollowerConfig
 from anyskin import AnySkinProcess
 import numpy as np
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -65,9 +66,21 @@ class BiSOFollower(Robot):
 
         # Only for compatibility with other parts of the codebase that expect a `robot.cameras` attribute
         self.cameras = {**self.left_arm.cameras, **self.right_arm.cameras}
+        if config.left_anyskin_port is not None:
+            self.left_anyskin = AnySkinProcess(
+                port=config.left_anyskin_port,
+                temp_filtered=True,
+            )
+            self.left_anyskin.start()
 
-        self.left_anyskin = AnySkinProcess(port=config.left_anyskin_port, device_id=0)
-        self.right_anyskin = AnySkinProcess(port=config.right_anyskin_port, device_id=1)
+        if config.right_anyskin_port is not None:
+            self.right_anyskin = AnySkinProcess(
+                port=config.right_anyskin_port,
+                temp_filtered=True,
+            )
+            self.right_anyskin.start()
+
+        time.sleep(0.2)  # 串口稳定
 
     def _read_anyskin(self, sensor: AnySkinProcess | None):
         if sensor is None:
@@ -75,20 +88,16 @@ class BiSOFollower(Robot):
 
         # 直接读共享内存（非阻塞）
         reading = sensor.last_reading
-        if reading is None or len(reading) <= 1:
-            return None
 
         # 去掉 timestamp
         mags = reading[1:]
 
         # 推断 num_mags（每个磁传感器 3 维）
-        if mags.size % 3 != 0:
+        if mags.size != 15:
             return None  # 数据异常保护
 
-        num_mags = mags.size // 3
-
         # reshape 成 (num_mags, 3)
-        tactile = mags.reshape(num_mags, 3).astype(np.float32, copy=False)
+        tactile = mags.astype(np.float32, copy=False)
 
         return tactile
 
@@ -158,11 +167,10 @@ class BiSOFollower(Robot):
         right_tactile = self._read_anyskin(self.right_anyskin)
 
         if left_tactile is not None:
-            obs_dict["left_tactile"] = left_tactile
+            obs_dict.update({"left_tactile": left_tactile})
 
         if right_tactile is not None:
-            obs_dict["right_tactile"] = right_tactile
-
+            obs_dict.update({"right_tactile": right_tactile})
         return obs_dict
 
     def send_action(self, action: RobotAction) -> RobotAction:
@@ -195,3 +203,11 @@ class BiSOFollower(Robot):
     def disconnect(self):
         self.left_arm.disconnect()
         self.right_arm.disconnect()
+
+        if self.left_anyskin is not None:
+            self.left_anyskin.pause_streaming()
+            self.left_anyskin.join()
+
+        if self.right_anyskin is not None:
+            self.right_anyskin.pause_streaming()
+            self.right_anyskin.join()
